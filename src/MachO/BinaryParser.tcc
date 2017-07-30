@@ -521,62 +521,6 @@ void BinaryParser::parse_dyldinfo_rebases() {
 	uint32_t skip = 0;
   std::pair<uint64_t, uint64_t> value_delta = {0, 0};
 
-  it_segments segments = this->binary_->segments();
-
-  auto&& save_relocation = [this, &segments] (uint32_t index, uint32_t offset, uint8_t type) {
-    if (index >= segments.size()) {
-      LOG(ERROR) << "Wrong index (" << std::dec << index << ")";
-      return;
-    }
-
-    uint64_t address = segments[index].virtual_address() + offset;
-
-    // Check if a relocation already exists:
-    Relocation* reloc = nullptr;
-    bool reloc_exists = false;
-    it_relocations reloctions = this->binary_->relocations();
-    auto&& it_reloc = std::find_if(
-        std::begin(reloctions),
-        std::end(reloctions),
-        [address] (const Relocation& r) {
-          return r.address() == address;
-        });
-
-    if (it_reloc != std::end(reloctions)) {
-      reloc = &(*it_reloc);
-      reloc_exists = true;
-    } else {
-      reloc = new RelocationDyld{address, type};
-    }
-
-    reloc->architecture_ = this->binary_->header().cpu_type();
-
-    switch (static_cast<REBASE_TYPES>(type)) {
-      case REBASE_TYPES::REBASE_TYPE_POINTER:
-        {
-          reloc->size_ = sizeof(pint_t) * 8;
-          break;
-        }
-
-
-      case REBASE_TYPES::REBASE_TYPE_TEXT_ABSOLUTE32:
-      case REBASE_TYPES::REBASE_TYPE_TEXT_PCREL32:
-        {
-          reloc->size_ = sizeof(uint32_t) * 8;
-          break;
-        }
-
-      default:
-        {
-          LOG(ERROR) << "Unsuported relocation type: 0x" << std::hex << type;
-        }
-    }
-
-    if (not reloc_exists) {
-      segments[index].relocations_.push_back(std::move(reloc));
-    }
-  };
-
   while (not done and current_offset < end_offset) {
     uint8_t imm    = this->stream_->read_integer<uint8_t>(current_offset) & REBASE_IMMEDIATE_MASK;
     uint8_t opcode = this->stream_->read_integer<uint8_t>(current_offset) & REBASE_OPCODE_MASK;
@@ -626,7 +570,7 @@ void BinaryParser::parse_dyldinfo_rebases() {
 			case REBASE_OPCODES::REBASE_OPCODE_DO_REBASE_IMM_TIMES:
         {
           for (size_t i = 0; i < imm; ++i) {
-            save_relocation(segment_index, segment_offset, type);
+            this->do_rebase<MACHO_T>(type, segment_index, segment_offset);
 				    segment_offset += sizeof(pint_t);
 				  }
 				  break;
@@ -641,7 +585,7 @@ void BinaryParser::parse_dyldinfo_rebases() {
           current_offset += std::get<1>(value_delta);
 
 				  for (size_t i = 0; i < count; ++i) {
-            save_relocation(segment_index, segment_offset, type);
+            this->do_rebase<MACHO_T>(type, segment_index, segment_offset);
 					  segment_offset += sizeof(pint_t);
 				  }
 				  break;
@@ -650,7 +594,7 @@ void BinaryParser::parse_dyldinfo_rebases() {
 			case REBASE_OPCODES::REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB:
         {
 
-          save_relocation(segment_index, segment_offset, type);
+          this->do_rebase<MACHO_T>(type, segment_index, segment_offset);
 
           value_delta     = this->stream_->read_uleb128(current_offset);
 
@@ -677,7 +621,7 @@ void BinaryParser::parse_dyldinfo_rebases() {
           current_offset += std::get<1>(value_delta);
 
 				  for (size_t i = 0; i < count; ++i) {
-            save_relocation(segment_index, segment_offset, type);
+            this->do_rebase<MACHO_T>(type, segment_index, segment_offset);
 					  segment_offset += skip + sizeof(pint_t);
 				  }
 
@@ -692,6 +636,7 @@ void BinaryParser::parse_dyldinfo_rebases() {
     }
   }
 
+  it_segments segments = this->binary_->segments();
   // Tie segments and relocations
   // The **OWNER**: Segment (destructor)
   for (SegmentCommand& segment : segments) {
@@ -1295,24 +1240,23 @@ void BinaryParser::do_bind(BINDING_CLASS cls,
     LOG(ERROR) << "Wrong index (" << std::dec << segment_idx << ")";
     return;
   }
-
+  SegmentCommand& segment = segments[segment_idx];
   // Address to bind
-  uint64_t address = segments[segment_idx].virtual_address() + segment_offset;
+  uint64_t address = segment.virtual_address() + segment_offset;
 
   // Check if a relocation already exists:
   Relocation* reloc = nullptr;
   bool reloc_exists = false;
 
-  it_relocations reloctions = this->binary_->relocations();
   auto&& it_reloc = std::find_if(
-      std::begin(reloctions),
-      std::end(reloctions),
-      [address] (const Relocation& r) {
-        return r.address() == address;
+      std::begin(segment.relocations_),
+      std::end(segment.relocations_),
+      [address] (const Relocation* r) {
+        return r->address() == address;
       });
 
-  if (it_reloc != std::end(reloctions)) {
-    reloc = &(*it_reloc);
+  if (it_reloc != std::end(segment.relocations_)) {
+    reloc = *it_reloc;
     reloc_exists = true;
   } else {
     reloc = new RelocationDyld{address, type};
@@ -1352,7 +1296,7 @@ void BinaryParser::do_bind(BINDING_CLASS cls,
 
   // Create a BindingInfo object
   BindingInfo* binding_info = new BindingInfo{cls, static_cast<BIND_TYPES>(type), address, addend, ord, is_weak};
-  binding_info->segment_ = &segments[segment_idx];
+  binding_info->segment_ = &segment;
 
 
   it_libraries libraries = this->binary_->libraries();
@@ -1379,11 +1323,72 @@ void BinaryParser::do_bind(BINDING_CLASS cls,
   }
 
   if (not reloc_exists) {
-    segments[segment_idx].relocations_.push_back(std::move(reloc));
+    segment.relocations_.push_back(reloc);
   }
   this->binary_->dyld_info().binding_info_.push_back(binding_info);
-  LOG(DEBUG) << to_string(cls) << segments[segment_idx].name() << " - " << symbol_name;
+  LOG(DEBUG) << to_string(cls) << segment.name() << " - " << symbol_name;
 }
+
+template<class MACHO_T>
+void BinaryParser::do_rebase(uint8_t type, uint8_t segment_idx, uint64_t segment_offset) {
+  using pint_t = typename MACHO_T::uint;
+
+  it_segments segments = this->binary_->segments();
+
+  if (segment_idx >= segments.size()) {
+    LOG(ERROR) << "Wrong index (" << std::dec << segment_idx << ")";
+    return;
+  }
+
+  SegmentCommand& segment = segments[segment_idx];
+  uint64_t address = segment.virtual_address() + segment_offset;
+
+  // Check if a relocation already exists:
+  Relocation* reloc = nullptr;
+  bool reloc_exists = false;
+
+  auto&& it_reloc = std::find_if(
+      std::begin(segment.relocations_),
+      std::end(segment.relocations_),
+      [&address] (const Relocation* r) {
+        return r->address() == address;
+      });
+
+  if (it_reloc != std::end(segment.relocations_)) {
+    reloc = *it_reloc;
+    reloc_exists = true;
+  } else {
+    reloc = new RelocationDyld{address, type};
+  }
+
+  reloc->architecture_ = this->binary_->header().cpu_type();
+
+  switch (static_cast<REBASE_TYPES>(type)) {
+    case REBASE_TYPES::REBASE_TYPE_POINTER:
+      {
+        reloc->size_ = sizeof(pint_t) * 8;
+        break;
+      }
+
+
+    case REBASE_TYPES::REBASE_TYPE_TEXT_ABSOLUTE32:
+    case REBASE_TYPES::REBASE_TYPE_TEXT_PCREL32:
+      {
+        reloc->size_ = sizeof(uint32_t) * 8;
+        break;
+      }
+
+    default:
+      {
+        LOG(ERROR) << "Unsuported relocation type: 0x" << std::hex << type;
+      }
+  }
+
+  if (not reloc_exists) {
+    segment.relocations_.push_back(reloc);
+  }
+};
+
 
 
 

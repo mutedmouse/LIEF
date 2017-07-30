@@ -91,7 +91,6 @@ void print_binary(const Binary* binary) {
 
 
 
-
 }
 
 int main(int argc, char **argv) {

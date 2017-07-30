@@ -58,6 +58,7 @@ void RelocationDyld::pc_relative(bool val) {
 
 void RelocationDyld::accept(Visitor& visitor) const {
   Relocation::accept(visitor);
+  visitor(*this); // Double dispatch to avoid down-casting
 }
 
 

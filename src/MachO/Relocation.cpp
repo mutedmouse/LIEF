@@ -149,6 +149,8 @@ void Relocation::type(uint8_t type) {
 }
 
 void Relocation::accept(Visitor& visitor) const {
+  visitor(*this); // Double dispatch to avoid down-casting
+
   visitor.visit(this->address());
   visitor.visit(this->is_pc_relative());
   visitor.visit(this->size());

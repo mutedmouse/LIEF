@@ -102,6 +102,10 @@ class DLL_PUBLIC BinaryParser : public LIEF::Parser {
         int64_t addend,
         bool is_weak);
 
+
+    template<class MACHO_T>
+    void do_rebase(uint8_t type, uint8_t segment_idx, uint64_t segment_offset);
+
     // Exports
     // -------
     void parse_dyldinfo_export(void);
