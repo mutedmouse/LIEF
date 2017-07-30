@@ -1315,7 +1315,7 @@ void BinaryParser::do_bind(BINDING_CLASS cls,
   if (this->binary_->has_symbol(symbol_name)) {
     Symbol& symbol = this->binary_->get_symbol(symbol_name);
     reloc->symbol_ = &symbol;
-    symbol.value(address);
+    //symbol.value(address);
     binding_info->symbol_ = &symbol;
     symbol.binding_info_ = binding_info;
   } else {

@@ -207,6 +207,9 @@ def print_symbols(binary):
         if symbol.has_binding_info and symbol.binding_info.has_library:
             libname = symbol.binding_info.library.name
 
+
+        symbol_value = symbol.value if symbol.value > 0 or not symbol.has_binding_info else symbol.binding_info.address
+
         try:
             symbol_name = symbol.demangled_name
         except:
@@ -216,7 +219,7 @@ def print_symbols(binary):
             symbol.type,
             symbol.numberof_sections,
             symbol.description,
-            symbol.value,
+            symbol_value,
             libname))
     print("")
 
